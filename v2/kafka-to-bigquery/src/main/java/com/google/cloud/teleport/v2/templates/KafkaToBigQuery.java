@@ -66,6 +66,7 @@ import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.text.io.StringSubstitutorReader;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -258,9 +259,7 @@ public class KafkaToBigQuery {
     List<String> topicsList = new ArrayList<>(Arrays.asList(options.getInputTopics().split(",")));
 
     Properties kafkaConsumerProperties = new Properties();
-    Properties systemConsumerProperties = new Properties();
     String kafkaPropertiesFileGcsPath = options.getKafkaConsumerProperties();
-    String systemPropertiesFileGcsPath = options.getSystemProperties();
 
     if (kafkaPropertiesFileGcsPath != null) {
       LOG.error("kafkaPropertiesFileGcsPath = " + kafkaPropertiesFileGcsPath);
@@ -280,28 +279,11 @@ public class KafkaToBigQuery {
       }
     }
 
-    if (systemPropertiesFileGcsPath != null) {
-      LOG.info("systemPropertiesFileGcsPath = " + systemPropertiesFileGcsPath);
-      ResourceId systemPropertiesResourceId = FileSystems
-          .matchNewResource(systemPropertiesFileGcsPath, false);
-
-      try (SecretManagerServiceClient client = SecretManagerServiceClient.create()) {
-        SecretManagerStringSubstitutor secretSubstitutor = new SecretManagerStringSubstitutor(
-            client);
-        Reader systemPropertiesReader = Channels
-            .newReader(FileSystems.open(systemPropertiesResourceId),
-                StandardCharsets.UTF_8.name());
-        systemConsumerProperties
-            .load(new StringSubstitutorReader(systemPropertiesReader, secretSubstitutor));
-      } catch (IOException ex) {
-        LOG.error("Could not load system properties file: " + ex.getMessage());
-      }
-    }
-
     Map<String,Object> map = new HashMap<>();
     for (String prop: kafkaConsumerProperties.stringPropertyNames()) {
       map.put(prop, kafkaConsumerProperties.getProperty(prop));
     }
+    map.putAll(ImmutableMap.of(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest"));
     Map<String,Object> propertiesMap = ImmutableMap.copyOf(map);
 
     /*
@@ -322,7 +304,6 @@ public class KafkaToBigQuery {
                 "ReadFromKafka",
                 KafkaIO.<String, String>read()
                     .withConsumerConfigUpdates(propertiesMap)
-                    // .withConsumerFactoryFn(new SecureConsumerFactoryFn(options.getKafkaConsumerProperties(), options.getSystemProperties()))
                     .withBootstrapServers(options.getBootstrapServers())
                     .withTopics(topicsList)
                     .withKeyDeserializerAndCoder(
