@@ -16,24 +16,34 @@
 package com.google.cloud.teleport.v2.templates;
 
 import com.google.api.services.bigquery.model.TableRow;
+import com.google.cloud.secretmanager.v1.SecretManagerServiceClient;
 import com.google.cloud.teleport.v2.coders.FailsafeElementCoder;
 import com.google.cloud.teleport.v2.transforms.BigQueryConverters.FailsafeJsonToTableRow;
 import com.google.cloud.teleport.v2.transforms.ErrorConverters;
 import com.google.cloud.teleport.v2.transforms.ErrorConverters.WriteKafkaMessageErrors;
 import com.google.cloud.teleport.v2.transforms.JavascriptTextTransformer.FailsafeJavascriptUdf;
 import com.google.cloud.teleport.v2.utils.SchemaUtils;
+import com.google.cloud.teleport.v2.utils.SecretManagerStringSubstitutor;
 import com.google.cloud.teleport.v2.values.FailsafeElement;
 import com.google.common.collect.ImmutableMap;
 import java.io.IOException;
+import java.io.Reader;
+import java.nio.channels.Channels;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Properties;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineResult;
 import org.apache.beam.sdk.coders.CoderRegistry;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.coders.NullableCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.io.FileSystems;
+import org.apache.beam.sdk.io.fs.ResourceId;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.CreateDisposition;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.WriteDisposition;
@@ -42,7 +52,6 @@ import org.apache.beam.sdk.io.gcp.bigquery.InsertRetryPolicy;
 import org.apache.beam.sdk.io.gcp.bigquery.WriteResult;
 import org.apache.beam.sdk.io.kafka.KafkaIO;
 import org.apache.beam.sdk.options.Description;
-import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.options.Validation.Required;
 import org.apache.beam.sdk.transforms.DoFn;
@@ -56,7 +65,7 @@ import org.apache.beam.sdk.values.PCollectionList;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.commons.lang3.ObjectUtils;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.commons.text.io.StringSubstitutorReader;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -170,7 +179,7 @@ public class KafkaToBigQuery {
    * The {@link Options} class provides the custom execution options passed by the executor at the
    * command-line.
    */
-  public interface Options extends PipelineOptions {
+  public interface Options extends KafkaSecurityOptions {
 
     @Description("Table spec to write the output to")
     @Required
@@ -248,6 +257,53 @@ public class KafkaToBigQuery {
 
     List<String> topicsList = new ArrayList<>(Arrays.asList(options.getInputTopics().split(",")));
 
+    Properties kafkaConsumerProperties = new Properties();
+    Properties systemConsumerProperties = new Properties();
+    String kafkaPropertiesFileGcsPath = options.getKafkaConsumerProperties();
+    String systemPropertiesFileGcsPath = options.getSystemProperties();
+
+    if (kafkaPropertiesFileGcsPath != null) {
+      LOG.error("kafkaPropertiesFileGcsPath = " + kafkaPropertiesFileGcsPath);
+      ResourceId kafkaPropertiesResourceId = FileSystems
+          .matchNewResource(kafkaPropertiesFileGcsPath, false);
+
+      try (SecretManagerServiceClient client = SecretManagerServiceClient.create()) {
+        SecretManagerStringSubstitutor secretSubstitutor = new SecretManagerStringSubstitutor(
+            client);
+        Reader kafkaPropertiesReader = Channels
+            .newReader(FileSystems.open(kafkaPropertiesResourceId),
+                StandardCharsets.UTF_8.name());
+        kafkaConsumerProperties
+            .load(new StringSubstitutorReader(kafkaPropertiesReader, secretSubstitutor));
+      } catch (IOException ex) {
+        LOG.error("Unable to create a Secret Manager client: " + ex.getMessage());
+      }
+    }
+
+    if (systemPropertiesFileGcsPath != null) {
+      LOG.info("systemPropertiesFileGcsPath = " + systemPropertiesFileGcsPath);
+      ResourceId systemPropertiesResourceId = FileSystems
+          .matchNewResource(systemPropertiesFileGcsPath, false);
+
+      try (SecretManagerServiceClient client = SecretManagerServiceClient.create()) {
+        SecretManagerStringSubstitutor secretSubstitutor = new SecretManagerStringSubstitutor(
+            client);
+        Reader systemPropertiesReader = Channels
+            .newReader(FileSystems.open(systemPropertiesResourceId),
+                StandardCharsets.UTF_8.name());
+        systemConsumerProperties
+            .load(new StringSubstitutorReader(systemPropertiesReader, secretSubstitutor));
+      } catch (IOException ex) {
+        LOG.error("Could not load system properties file: " + ex.getMessage());
+      }
+    }
+
+    Map<String,Object> map = new HashMap<>();
+    for (String prop: kafkaConsumerProperties.stringPropertyNames()) {
+      map.put(prop, kafkaConsumerProperties.getProperty(prop));
+    }
+    Map<String,Object> propertiesMap = ImmutableMap.copyOf(map);
+
     /*
      * Steps:
      *  1) Read messages in from Kafka
@@ -257,7 +313,6 @@ public class KafkaToBigQuery {
      *  3) Write successful records out to BigQuery
      *  4) Write failed records out to BigQuery
      */
-
     PCollectionTuple convertedTableRows =
         pipeline
             /*
@@ -266,8 +321,8 @@ public class KafkaToBigQuery {
             .apply(
                 "ReadFromKafka",
                 KafkaIO.<String, String>read()
-                    .withConsumerConfigUpdates(
-                        ImmutableMap.of(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest"))
+                    .withConsumerConfigUpdates(propertiesMap)
+                    // .withConsumerFactoryFn(new SecureConsumerFactoryFn(options.getKafkaConsumerProperties(), options.getSystemProperties()))
                     .withBootstrapServers(options.getBootstrapServers())
                     .withTopics(topicsList)
                     .withKeyDeserializerAndCoder(
