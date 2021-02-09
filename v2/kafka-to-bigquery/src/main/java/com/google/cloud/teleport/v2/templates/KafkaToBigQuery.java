@@ -262,7 +262,6 @@ public class KafkaToBigQuery {
     String kafkaPropertiesFileGcsPath = options.getKafkaConsumerProperties();
 
     if (kafkaPropertiesFileGcsPath != null) {
-      LOG.error("kafkaPropertiesFileGcsPath = " + kafkaPropertiesFileGcsPath);
       ResourceId kafkaPropertiesResourceId = FileSystems
           .matchNewResource(kafkaPropertiesFileGcsPath, false);
 
