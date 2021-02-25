@@ -1,0 +1,51 @@
+{
+  "name": "Kafka to BigQuery",
+  "description": "An Apache Beam streaming pipeline that reads JSON encoded messages from Apache Kafka, optionally uses a Javascript UDF to transform the message data, and writes the results to a BigQuery table.",
+  "parameters": [
+    {
+      "name": "kafkaConsumerProperties",
+      "label": "GCS location of Kafka consumer properties.",
+      "helpText": "GCS location of your Kafka consumer properties file.",
+      "isOptional": true
+    },
+    {
+      "name": "kafkaProducerProperties",
+      "label": "GCS location of Kafka producer properties.",
+      "helpText": "GCS location of your Kafka producer properties file.",
+      "isOptional": true
+    },
+    {
+      "name": "kafkaSystemProperties",
+      "label": "GCS location of Kafka system properties for configuring the JVM.",
+      "helpText": "GCS location of your Kafka system properties file.",
+      "isOptional": true
+    },
+    {
+      "name": "outputTableSpec",
+      "label": "BigQuery table specification",
+      "helpText": "BigQuery output table spec in the form 'project:dataset.table'"
+    },
+    {
+      "name": "bootstrapServers",
+      "label": "Kafka bootstrap servers",
+      "helpText": "List of Kafka bootstrap servers."
+    },
+    {
+      "name": "inputTopics",
+      "label": "Kafka input topics",
+      "helpText": "Kafka topics to read from."
+    },
+    {
+      "name": "javascriptTextTransformGcsPath",
+      "label": "Javascript transformation script.",
+      "helpText": "GCS path to a Javascript program for element transformation.",
+      "isOptional": true
+    },
+    {
+      "name": "javascriptTextTransformFunctionName",
+      "label": "Javscript transformation function name.",
+      "helpText": "The name of the Javascript function to execute.",
+      "isOptional": true
+    }
+  ]
+}

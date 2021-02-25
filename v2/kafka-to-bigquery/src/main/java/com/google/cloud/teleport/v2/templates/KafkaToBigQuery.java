@@ -180,7 +180,7 @@ public class KafkaToBigQuery {
    * The {@link Options} class provides the custom execution options passed by the executor at the
    * command-line.
    */
-  public interface Options extends KafkaSecurityOptions {
+  public interface Options extends KafkaPropertiesOptions {
 
     @Description("Table spec to write the output to")
     @Required
